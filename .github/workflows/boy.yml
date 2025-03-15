@@ -1,0 +1,32 @@
+name: Word of the Day Bot
+
+on:
+  schedule:
+    - cron: '*/10 * * * *' # Every 10 minutes
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          persist-credentials: true
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '16'
+      - name: Install dependencies
+        run: npm install nostr-tools axios
+      - name: Run bot
+        env:
+          NOSTR_NSEC: ${{ secrets.NOSTR_NSEC }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: node bot.js
+      - name: Commit changes
+        run: |
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git config user.name "github-actions[bot]"
+          git add words.json
+          git commit -m "Update words.json with new word/winners" || echo "No changes"
+          git push
