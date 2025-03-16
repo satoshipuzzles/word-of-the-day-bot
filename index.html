@@ -37,7 +37,6 @@
       color: #60a5fa;
       text-decoration: none;
     }
-    /* Toast Notification Styles */
     #toast {
       position: fixed;
       bottom: 20px;
@@ -53,6 +52,24 @@
     }
     #toast.show {
       opacity: 1;
+    }
+    #modal {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0.8);
+      z-index: 1000;
+    }
+    #modal-content {
+      background: #1f2937;
+      margin: 15% auto;
+      padding: 2rem;
+      width: 80%;
+      max-width: 500px;
+      border-radius: 0.5rem;
     }
   </style>
 </head>
@@ -81,11 +98,21 @@
       </section>
       <div id="home" class="tab-content active">
         <div class="card">
-          <h2 class="text-2xl font-bold mb-4">Current Word of the Day</h2>
+          <div class="flex justify-between items-center">
+            <h2 class="text-2xl font-bold mb-4">Current Word of the Day</h2>
+            <button onclick="showModal()" class="bg-gray-600 text-white px-3 py-1 rounded hover:bg-gray-500">How to Play</button>
+          </div>
           <div id="current-word" class="mb-4">Loading...</div>
           <p id="status" class="mb-4">Fetching status...</p>
+          <h3 class="text-xl font-bold mb-2">Guess the Word</h3>
+          <form id="guess-form" class="flex gap-2 mb-4">
+            <input id="guess-input" type="text" placeholder="Your guess..." class="bg-gray-800 text-white p-2 rounded w-full">
+            <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded">Submit</button>
+          </form>
           <h3 class="text-xl font-bold mb-2">Hints</h3>
-          <div id="hints">Loading hints...</div>
+          <div id="hints" class="mb-4">Loading hints...</div>
+          <h3 class="text-xl font-bold mb-2">Recent Winners</h3>
+          <div id="recent-winners">Loading...</div>
         </div>
         <div class="card">
           <h2 class="text-2xl font-bold mb-4">Bitcoin Block Info</h2>
@@ -99,7 +126,7 @@
       </div>
       <div id="leaderboard" class="tab-content hidden">
         <h2 class="text-2xl font-bold mb-4">Leaderboard</h2>
-        <div id="leaderboard-items">Coming soon...</div>
+        <div id="leaderboard-items">Loading...</div>
       </div>
     </main>
   </div>
@@ -107,14 +134,21 @@
     <p>Built by <a href="https://puzzl35.com/" target="_blank">Puzzl35</a></p>
   </footer>
   <div id="toast">NPUB copied to clipboard!</div>
+  <div id="modal">
+    <div id="modal-content">
+      <h2 class="text-2xl font-bold mb-4">How to Play</h2>
+      <p>Every 144 Bitcoin blocks (~24 hours), the bot posts an image of a word. Guess the word by submitting it below or replying to the bot’s post on Nostr with an e-tag. Hints are posted every 21 blocks (~3.5 hours) up to 5 times. First correct guess wins!</p>
+      <button onclick="hideModal()" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded mt-4">Close</button>
+    </div>
+  </div>
 
   <script src="https://unpkg.com/nostr-tools@1.17.0/lib/nostr.bundle.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@2.3.3/dist/purify.min.js"></script>
   <script>
     const npub = 'npub1qd9c33yx8qcsluhak20a9cw90vddj3r89mgt7jhs66hckrlu3jdtugyfdsr';
+    let latestImageEventId = null;
 
-    // Wait for nostr-tools to load
     const nostrScript = document.querySelector('script[src*="nostr-tools"]');
     nostrScript.onload = function() {
       if (typeof nostrTools === 'undefined') {
@@ -126,6 +160,9 @@
       }
       fetchProfile();
       fetchFeed();
+      fetchHints();
+      fetchWinners();
+      fetchLeaderboard();
     };
     nostrScript.onerror = function() {
       console.error('Failed to load nostr-tools script');
@@ -145,13 +182,11 @@
           const profile = JSON.parse(event.content);
           document.getElementById('bot-name').textContent = profile.name || 'WordBot';
           document.getElementById('bot-picture').src = profile.picture || 'https://via.placeholder.com/48';
-          document.getElementById('current-word').textContent = 'Ready!';
-          document.getElementById('status').textContent = 'Profile loaded';
+          document.getElementById('status').textContent = 'Ready!';
         });
       } catch (error) {
         console.error('Error fetching profile:', error);
         document.getElementById('bot-name').textContent = 'Error';
-        document.getElementById('current-word').textContent = 'Error loading profile';
         document.getElementById('status').textContent = 'N/A';
       }
     }
@@ -171,10 +206,70 @@
             <div>${DOMPurify.sanitize(marked.parse(event.content))}</div>
           `;
           document.getElementById('feed-items').prepend(feedItem);
+          if (!event.tags.some(t => t[0] === 'e')) {
+            latestImageEventId = event.id;
+            document.getElementById('current-word').innerHTML = DOMPurify.sanitize(marked.parse(event.content));
+          }
         });
       } catch (error) {
         console.error('Error fetching feed:', error);
         document.getElementById('feed-items').innerHTML = '<p>Error loading feed</p>';
+      }
+    }
+
+    async function fetchHints() {
+      try {
+        const { nip19 } = nostrTools;
+        const { data: botPubkey } = nip19.decode(npub);
+        const relay = nostrTools.relayInit('wss://relay.damus.io');
+        await relay.connect();
+        const sub = relay.sub([{ kinds: [1], authors: [botPubkey] }]);
+        const hints = [];
+        sub.on('event', (event) => {
+          if (event.content.startsWith('Hint:') && event.tags.some(t => t[0] === 'e')) {
+            hints.push(event.content);
+            document.getElementById('hints').innerHTML = hints.map(h => `<p>${h}</p>`).join('');
+          }
+        });
+      } catch (error) {
+        console.error('Error fetching hints:', error);
+        document.getElementById('hints').textContent = 'Error loading hints';
+      }
+    }
+
+    async function fetchWinners() {
+      try {
+        const { nip19 } = nostrTools;
+        const { data: botPubkey } = nip19.decode(npub);
+        const relay = nostrTools.relayInit('wss://relay.damus.io');
+        await relay.connect();
+        const sub = relay.sub([{ kinds: [1], authors: [botPubkey], limit: 5 }]);
+        const winners = [];
+        sub.on('event', (event) => {
+          if (event.content.includes('Congratulations')) {
+            winners.push(event.content);
+            document.getElementById('recent-winners').innerHTML = winners.map(w => `<p>${w}</p>`).join('');
+          }
+        });
+      } catch (error) {
+        console.error('Error fetching winners:', error);
+        document.getElementById('recent-winners').textContent = 'Error loading winners';
+      }
+    }
+
+    async function fetchLeaderboard() {
+      try {
+        const stateResponse = await fetch('/words.json');
+        if (!stateResponse.ok) throw new Error('Failed to fetch words.json');
+        const state = await stateResponse.json();
+        const leaderboard = Object.entries(state.leaderboard)
+          .sort((a, b) => b[1] - a[1])
+          .map(([pubkey, wins]) => `<p>${pubkey.slice(0, 8)}...: ${wins} wins</p>`)
+          .join('');
+        document.getElementById('leaderboard-items').innerHTML = leaderboard || 'No winners yet';
+      } catch (error) {
+        console.error('Error fetching leaderboard:', error);
+        document.getElementById('leaderboard-items').textContent = 'Error loading leaderboard';
       }
     }
 
@@ -203,10 +298,8 @@
       navigator.clipboard.writeText(npub).then(() => {
         const toast = document.getElementById('toast');
         toast.classList.add('show');
-        setTimeout(() => toast.classList.remove('show'), 3000); // Auto-dismiss after 3 seconds
-      }).catch(err => {
-        console.error('Failed to copy NPUB:', err);
-      });
+        setTimeout(() => toast.classList.remove('show'), 3000);
+      }).catch(err => console.error('Failed to copy NPUB:', err));
     }
 
     function showTab(tabName) {
@@ -214,9 +307,25 @@
       document.getElementById(tabName).classList.remove('hidden');
     }
 
+    function showModal() {
+      document.getElementById('modal').style.display = 'block';
+    }
+
+    function hideModal() {
+      document.getElementById('modal').style.display = 'none';
+    }
+
+    document.getElementById('guess-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const guess = document.getElementById('guess-input').value;
+      if (guess && latestImageEventId) {
+        window.open(`nostr:${npub}?content=${encodeURIComponent(guess)}&e=${latestImageEventId}`, '_blank');
+      }
+      document.getElementById('guess-input').value = '';
+    });
+
     document.addEventListener('DOMContentLoaded', () => {
       fetchBlockInfo();
-      // Nostr functions run after script loads via onload
     });
   </script>
 </body>
