@@ -2,16 +2,14 @@ name: Word of the Day Bot
 
 on:
   schedule:
-    - cron: '*/10 * * * *' # Every 10 minutes
-  workflow_dispatch: # Allow manual trigger
+    - cron: '*/10 * * * *'  # Every 10 minutes
+  workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-        with:
-          persist-credentials: true
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
@@ -22,11 +20,12 @@ jobs:
         env:
           NOSTR_NSEC: ${{ secrets.NOSTR_NSEC }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.repository.split('/')[1] }}/
         run: node bot.js
       - name: Commit changes
         run: |
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git config user.name "github-actions[bot]"
-          git add words.json
-          git commit -m "Update words.json with new word/winners" || echo "No changes"
+          git config user.name "GitHub Actions Bot"
+          git config user.email "<>"
+          git add words.json images/*
+          git commit -m "Update words and images" || echo "No changes to commit"
           git push
