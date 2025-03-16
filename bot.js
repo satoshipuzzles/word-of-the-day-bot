@@ -3,142 +3,172 @@ const path = require('path');
 const { relayInit, getPublicKey, getEventHash, signEvent } = require('nostr-tools');
 const axios = require('axios');
 
-const RELAYS = ['wss://relay.damus.io', 'wss://nos.lol'];
-const BLOCKSTREAM_API = 'https://blockstream.info/api/blocks/tip/height';
-const OPENAI_API_URL = 'https://api.openai.com/v1/images/generations';
+async function main() {
+  // Load state
+  const state = JSON.parse(fs.readFileSync('words.json', 'utf8'));
 
-// Get current Bitcoin block height
+  // Fetch current block height
+  const current_block = await getCurrentBlockHeight();
+
+  // Post new word if it's time
+  if (current_block >= state.next_word_block) {
+    const word = await getRandomWord();
+    const image_url = await generateAndSaveImage(word);
+    const event_id = await postImageEvent(image_url);
+    state.words.push({
+      word,
+      image_url,
+      image_event_id: event_id,
+      posted_at_block: current_block,
+      next_hint_block: current_block + 21,
+      hints_posted: 0,
+      winner: null
+    });
+    state.next_word_block += 144; // Schedule next word 144 blocks later
+  }
+
+  // Process each ongoing word
+  for (const word of state.words) {
+    if (word.winner === null) {
+      // Post hint if it's time
+      if (current_block >= word.next_hint_block) {
+        const hint = await getHint(word.word);
+        await postHintEvent(word.image_event_id, hint);
+        word.hints_posted += 1;
+        word.next_hint_block += 21; // Schedule next hint 21 blocks later
+      }
+
+      // Check replies for correct guesses
+      const replies = await getReplies(word.image_event_id, state.last_checked_time);
+      for (const reply of replies) {
+        if (reply.content.toLowerCase().includes(word.word.toLowerCase())) {
+          word.winner = reply.pubkey;
+          await postWinnerEvent(word.image_event_id, word.word, reply.pubkey);
+          state.leaderboard[reply.pubkey] = (state.leaderboard[reply.pubkey] || 0) + 1;
+          break; // Stop checking once winner is found
+        }
+      }
+    }
+  }
+
+  // Update last_checked_time
+  state.last_checked_time = Math.floor(Date.now() / 1000);
+
+  // Save updated state
+  fs.writeFileSync('words.json', JSON.stringify(state, null, 2));
+}
+
+// Helper Functions
+
 async function getCurrentBlockHeight() {
-  const response = await axios.get(BLOCKSTREAM_API);
+  const response = await axios.get('https://blockstream.info/api/blocks/tip/height');
   return parseInt(response.data);
 }
 
-// Select a random word and definition
 async function getRandomWord() {
-  const wordsList = JSON.parse(fs.readFileSync('words_list.json', 'utf8'));
-  const randomIndex = Math.floor(Math.random() * wordsList.length);
-  return wordsList[randomIndex];
+  const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+    model: 'gpt-4',
+    messages: [{ role: 'user', content: 'Give me a random word.' }]
+  }, {
+    headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` }
+  });
+  return response.data.choices[0].message.content.trim();
 }
 
-// Generate image with DALL-E
-async function generateImage(word, openaiKey) {
-  const response = await axios.post(
-    OPENAI_API_URL,
-    {
-      prompt: `An image representing the word "${word}"`,
-      n: 1,
-      size: '512x512',
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${openaiKey}`,
-        'Content-Type': 'application/json',
-      },
-    }
-  );
-  return response.data.data[0].url;
+async function generateAndSaveImage(word) {
+  const response = await axios.post('https://api.openai.com/v1/images/generations', {
+    prompt: `An image of ${word}`,
+    n: 1,
+    size: '512x512'
+  }, {
+    headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` }
+  });
+  const image_url = response.data.data[0].url;
+  const filename = `word-${Date.now()}.png`;
+  const image_path = path.join('images', filename);
+  if (!fs.existsSync('images')) fs.mkdirSync('images');
+  const writer = fs.createWriteStream(image_path);
+  const image_response = await axios.get(image_url, { responseType: 'stream' });
+  image_response.data.pipe(writer);
+  await new Promise((resolve, reject) => {
+    writer.on('finish', resolve);
+    writer.on('error', reject);
+  });
+  return `${process.env.GITHUB_PAGES_URL}images/${filename}`;
 }
 
-// Publish a Nostr event
-async function publishEvent(content, privateKey, tags = []) {
+async function postImageEvent(image_url) {
+  const content = `![image](${image_url})`;
   const event = {
     kind: 1,
-    pubkey: getPublicKey(privateKey),
+    pubkey: getPublicKey(process.env.NOSTR_NSEC),
     created_at: Math.floor(Date.now() / 1000),
-    tags,
-    content,
+    tags: [],
+    content
   };
   event.id = getEventHash(event);
-  event.sig = signEvent(event, privateKey);
-
-  for (const url of RELAYS) {
-    const relay = relayInit(url);
-    await relay.connect();
-    await relay.publish(event);
-    relay.close();
-  }
+  event.sig = signEvent(event, process.env.NOSTR_NSEC);
+  const relay = relayInit('wss://relay.damus.io');
+  await relay.connect();
+  await relay.publish(event);
+  relay.close();
   return event.id;
 }
 
-// Fetch comments replying to an event
-async function getComments(eventId) {
-  const comments = [];
-  for (const url of RELAYS) {
-    const relay = relayInit(url);
-    await relay.connect();
-    const sub = relay.sub([{ kinds: [1], '#e': [eventId] }]);
-    sub.on('event', (event) => comments.push(event));
-    await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5s
-    relay.close();
-  }
-  return comments;
+async function getHint(word) {
+  const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+    model: 'gpt-4',
+    messages: [{ role: 'user', content: `Give me a hint for the word "${word}" without saying the word.` }]
+  }, {
+    headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` }
+  });
+  return response.data.choices[0].message.content.trim();
 }
 
-// Determine winners from comments
-function determineWinners(comments, correctWord) {
-  const winners = new Set();
-  for (const comment of comments) {
-    const match = comment.content.match(/guess:\s*(\w+)/i);
-    if (match && match[1].toLowerCase() === correctWord.toLowerCase()) {
-      winners.add(comment.pubkey);
-    }
-  }
-  return Array.from(winners);
+async function postHintEvent(image_event_id, hint) {
+  const content = `Hint: ${hint}`;
+  const event = {
+    kind: 1,
+    pubkey: getPublicKey(process.env.NOSTR_NSEC),
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', image_event_id]],
+    content
+  };
+  event.id = getEventHash(event);
+  event.sig = signEvent(event, process.env.NOSTR_NSEC);
+  const relay = relayInit('wss://relay.damus.io');
+  await relay.connect();
+  await relay.publish(event);
+  relay.close();
 }
 
-async function main() {
-  const privateKey = process.env.NOSTR_NSEC;
-  const openaiKey = process.env.OPENAI_API_KEY;
-  const wordsJsonPath = path.join(__dirname, 'words.json');
-  let wordsData = { words: [], leaderboard: {} };
+async function getReplies(image_event_id, since) {
+  const relay = relayInit('wss://relay.damus.io');
+  await relay.connect();
+  const sub = relay.sub([{ kinds: [1], '#e': [image_event_id], since }]);
+  const replies = [];
+  sub.on('event', event => replies.push(event));
+  await new Promise(resolve => setTimeout(resolve, 5000)); // Collect replies for 5 seconds
+  sub.unsub();
+  relay.close();
+  return replies;
+}
 
-  if (fs.existsSync(wordsJsonPath)) {
-    wordsData = JSON.parse(fs.readFileSync(wordsJsonPath, 'utf8'));
-  }
-
-  const currentHeight = await getCurrentBlockHeight();
-  const lastPostedHeight =
-    wordsData.words.length > 0
-      ? wordsData.words[wordsData.words.length - 1].block_height
-      : 0;
-
-  if (currentHeight >= lastPostedHeight + 144) {
-    // Handle previous word (if exists)
-    if (wordsData.words.length > 0) {
-      const previousWord = wordsData.words[wordsData.words.length - 1];
-      const comments = await getComments(previousWord.event_id);
-      const winners = determineWinners(comments, previousWord.word);
-      previousWord.winners = winners;
-
-      // Update leaderboard
-      for (const winner of winners) {
-        wordsData.leaderboard[winner] = (wordsData.leaderboard[winner] || 0) + 1;
-      }
-
-      // Publish reveal event
-      const revealContent = `# Word of the Day Reveal\n\nThe word was: **${previousWord.word}**\n\nWinners:\n${winners
-        .map((w) => `- nostr:${w}`)
-        .join('\n') || 'None'}`;
-      await publishEvent(revealContent, privateKey);
-    }
-
-    // Post new word
-    const { word, definition } = await getRandomWord();
-    const imageUrl = await generateImage(word, openaiKey);
-    const content = `# Word of the Day\n\n**Definition:** ${definition}\n\n![Image](${imageUrl})\n\nGuess the word by replying with "guess: your_word"`;
-    const eventId = await publishEvent(content, privateKey);
-
-    wordsData.words.push({
-      block_height: currentHeight,
-      word,
-      definition,
-      image_url: imageUrl,
-      event_id: eventId,
-      winners: [],
-    });
-
-    fs.writeFileSync(wordsJsonPath, JSON.stringify(wordsData, null, 2));
-  }
+async function postWinnerEvent(image_event_id, word, winner_pubkey) {
+  const content = `The word was "${word}". Congratulations to nostr:${winner_pubkey} for guessing it!`;
+  const event = {
+    kind: 1,
+    pubkey: getPublicKey(process.env.NOSTR_NSEC),
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [['e', image_event_id]],
+    content
+  };
+  event.id = getEventHash(event);
+  event.sig = signEvent(event, process.env.NOSTR_NSEC);
+  const relay = relayInit('wss://relay.damus.io');
+  await relay.connect();
+  await relay.publish(event);
+  relay.close();
 }
 
 main().catch(console.error);
