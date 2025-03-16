@@ -18,12 +18,11 @@ jobs:
         env:
           NOSTR_NSEC: ${{ secrets.NOSTR_NSEC }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          GITHUB_PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.repository.split('/')[1] }}/
         run: node bot.js
       - name: Commit changes
         run: |
           git config user.name "GitHub Actions Bot"
           git config user.email "<>"
-          git add words.json images/*
-          git commit -m "Update words and images" || echo "No changes to commit"
+          git add words.json
+          git commit -m "Update words.json" || echo "No changes to commit"
           git push
