@@ -1,10 +1,8 @@
 name: Word of the Day Bot
-
 on:
   schedule:
     - cron: '*/10 * * * *'  # Every 10 minutes
   workflow_dispatch:
-
 jobs:
   run-bot:
     runs-on: ubuntu-latest
