@@ -1,5 +1,4 @@
 const fs = require('fs');
-const path = require('path');
 const { relayInit, getPublicKey, getEventHash, signEvent } = require('nostr-tools');
 const axios = require('axios');
 
@@ -18,7 +17,7 @@ async function main() {
   if (current_block >= state.next_word_block) {
     console.log('Posting new word image');
     const word = await getRandomWord();
-    const image_url = await generateAndSaveImage(word);
+    const image_url = await generateImage(word);
     const event_id = await postImageEvent(image_url, relays);
     state.words.push({
       word,
@@ -29,7 +28,7 @@ async function main() {
       hints_posted: 0,
       winner: null
     });
-    state.next_word_block = current_block + 144; // Set to next drop
+    state.next_word_block = current_block + 144;
     console.log(`New word posted: ${word}, Next drop at block ${state.next_word_block}`);
   }
 
@@ -85,25 +84,14 @@ async function getRandomWord() {
   }
 }
 
-async function generateAndSaveImage(word) {
+async function generateImage(word) {
   try {
     const response = await axios.post('https://api.openai.com/v1/images/generations', {
       prompt: `An image of ${word}`,
       n: 1,
       size: '512x512'
     }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` } });
-    const image_url = response.data.data[0].url;
-    const filename = `word-${Date.now()}.png`;
-    const image_path = path.join('images', filename);
-    if (!fs.existsSync('images')) fs.mkdirSync('images');
-    const writer = fs.createWriteStream(image_path);
-    const image_response = await axios.get(image_url, { responseType: 'stream' });
-    image_response.data.pipe(writer);
-    await new Promise((resolve, reject) => {
-      writer.on('finish', resolve);
-      writer.on('error', reject);
-    });
-    return `${process.env.GITHUB_PAGES_URL}images/${filename}`;
+    return response.data.data[0].url; // Use OpenAI's temporary URL directly
   } catch (error) {
     console.error('Error generating image:', error);
     throw error;
