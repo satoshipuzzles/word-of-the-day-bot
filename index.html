@@ -3,58 +3,43 @@
 <head>
   <meta charset="UTF-8">
   <title>Word of the Day Bot</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    .word-card { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; }
-    .leaderboard { margin-top: 20px; }
-    img { max-width: 256px; }
-  </style>
 </head>
 <body>
   <h1>Word of the Day Bot</h1>
-  <section id="status">
-    <p>Current Block Height: <span id="current-height">Loading...</span></p>
-    <p>Blocks Until Next Word: <span id="blocks-left">Loading...</span></p>
-  </section>
-  <h2>Past Words</h2>
-  <div id="past-words"></div>
+  <p>Current Block Height: <span id="current-block"></span></p>
+  <p>Blocks until next word: <span id="blocks-until-next"></span></p>
+  <h2>Ongoing Words</h2>
+  <div id="ongoing-words"></div>
   <h2>Leaderboard</h2>
   <div id="leaderboard"></div>
 
   <script>
     async function loadData() {
-      const wordsData = await fetch('/words.json').then((res) => res.json());
-      const currentHeight = await fetch('https://blockstream.info/api/blocks/tip/height')
-        .then((res) => res.text())
-        .then((text) => parseInt(text));
+      const state = await fetch('/words.json').then(res => res.json());
+      const current_block = await fetch('https://blockstream.info/api/blocks/tip/height').then(res => res.text()).then(text => parseInt(text));
+      document.getElementById('current-block').textContent = current_block;
+      const blocks_until_next = state.next_word_block - current_block;
+      document.getElementById('blocks-until-next').textContent = blocks_until_next > 0 ? blocks_until_next : 'soon';
 
-      document.getElementById('current-height').textContent = currentHeight;
-
-      const lastPostedHeight = wordsData.words.length > 0 ? wordsData.words[wordsData.words.length - 1].block_height : 0;
-      const nextPostHeight = lastPostedHeight + 144;
-      const blocksLeft = nextPostHeight - currentHeight;
-      document.getElementById('blocks-left').textContent = blocksLeft > 0 ? blocksLeft : 'Posting soon';
-
-      const pastWordsDiv = document.getElementById('past-words');
-      wordsData.words.forEach((word) => {
-        const card = document.createElement('div');
-        card.className = 'word-card';
-        card.innerHTML = `
-          <h3>Block ${word.block_height}</h3>
-          <p><strong>Definition:</strong> ${word.definition}</p>
-          <img src="${word.image_url}" alt="Word Image">
-          <p><strong>Word:</strong> ${word.word}</p>
-          <p><strong>Winners:</strong> ${word.winners.map((w) => `<a href="nostr:${w}">${w}</a>`).join(', ') || 'None'}</p>
+      const ongoingWordsDiv = document.getElementById('ongoing-words');
+      state.words.forEach(word => {
+        const div = document.createElement('div');
+        div.innerHTML = `
+          <h3>Posted at block ${word.posted_at_block}</h3>
+          <img src="${word.image_url}" alt="image" width="256">
+          <p>Hints posted: ${word.hints_posted}</p>
+          ${word.winner ? `<p>Word: ${word.word}</p><p>Winner: nostr:${word.winner}</p>` : '<p>Not guessed yet</p>'}
         `;
-        pastWordsDiv.appendChild(card);
+        ongoingWordsDiv.appendChild(div);
       });
 
       const leaderboardDiv = document.getElementById('leaderboard');
-      const leaderboard = Object.entries(wordsData.leaderboard)
-        .sort((a, b) => b[1] - a[1])
-        .map(([npub, wins]) => `<p><a href="nostr:${npub}">${npub}</a>: ${wins} wins</p>`)
-        .join('');
-      leaderboardDiv.innerHTML = leaderboard || 'No winners yet';
+      const leaderboard = Object.entries(state.leaderboard).sort((a, b) => b[1] - a[1]);
+      leaderboard.forEach(([npub, wins]) => {
+        const p = document.createElement('p');
+        p.textContent = `nostr:${npub}: ${wins} wins`;
+        leaderboardDiv.appendChild(p);
+      });
     }
 
     loadData().catch(console.error);
