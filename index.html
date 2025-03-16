@@ -2,47 +2,113 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Word of the Day Bot</title>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    body {
+      background-color: #121212;
+      color: #ffffff;
+    }
+    .tab-content {
+      display: none;
+    }
+    .tab-content.active {
+      display: block;
+    }
+  </style>
 </head>
-<body>
-  <h1>Word of the Day Bot</h1>
-  <p>Current Block Height: <span id="current-block"></span></p>
-  <p>Blocks until next word: <span id="blocks-until-next"></span></p>
-  <h2>Ongoing Words</h2>
-  <div id="ongoing-words"></div>
-  <h2>Leaderboard</h2>
-  <div id="leaderboard"></div>
+<body class="min-h-screen flex flex-col">
+  <header class="bg-gray-900 p-4 flex items-center justify-between">
+    <div class="flex items-center">
+      <img id="bot-picture" class="w-16 h-16 rounded-full" alt="Bot Profile">
+      <h1 id="bot-name" class="ml-4 text-2xl font-bold">Word of the Day Bot</h1>
+    </div>
+    <div>
+      <a href="nostr:npub1qd9c33yx8qcsluhak20a9cw90vddj3r89mgt7jhs66hckrlu3jdtugyfdsr" class="bg-green-500 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">Follow on Nostr</a>
+    </div>
+  </header>
+  <main class="flex-grow p-4">
+    <section class="mb-4">
+      <p>Bot's NPUB: <span id="npub-text">npub1qd9c33yx8qcsluhak20a9cw90vddj3r89mgt7jhs66hckrlu3jdtugyfdsr</span></p>
+      <button onclick="copyNPUB()" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">Copy NPUB</button>
+    </section>
+    <nav class="mb-4">
+      <button onclick="showTab('home')" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Home</button>
+      <button onclick="showTab('feed')" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Feed</button>
+      <button onclick="showTab('leaderboard')" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded">Leaderboard</button>
+    </nav>
+    <div id="home" class="tab-content active">
+      <h2 class="text-xl font-bold mb-2">Current Word of the Day</h2>
+      <div id="current-word" class="bg-gray-800 p-4 rounded"></div>
+      <p id="status" class="mt-2"></p>
+      <h3 class="text-lg font-bold mt-4">Hints</h3>
+      <div id="hints" class="bg-gray-800 p-4 rounded"></div>
+    </div>
+    <div id="feed" class="tab-content">
+      <h2 class="text-xl font-bold mb-2">Feed</h2>
+      <div id="feed-items" class="space-y-4"></div>
+    </div>
+    <div id="leaderboard" class="tab-content">
+      <h2 class="text-xl font-bold mb-2">Leaderboard</h2>
+      <div id="leaderboard-items"></div>
+    </div>
+  </main>
+  <footer class="bg-gray-900 p-4 text-center">
+    <p>Powered by Nostr and OpenAI</p>
+  </footer>
 
+  <script src="https://unpkg.com/nostr-tools@1.7.5/dist/nostr-tools.umd.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@2.3.3/dist/purify.min.js"></script>
   <script>
-    async function loadData() {
-      const state = await fetch('/words.json').then(res => res.json());
-      const current_block = await fetch('https://blockstream.info/api/blocks/tip/height').then(res => res.text()).then(text => parseInt(text));
-      document.getElementById('current-block').textContent = current_block;
-      const blocks_until_next = state.next_word_block - current_block;
-      document.getElementById('blocks-until-next').textContent = blocks_until_next > 0 ? blocks_until_next : 'soon';
+    const npub = 'npub1qd9c33yx8qcsluhak20a9cw90vddj3r89mgt7jhs66hckrlu3jdtugyfdsr';
+    const { nip19 } = nostrTools;
+    const { type, data: botPubkey } = nip19.decode(npub);
 
-      const ongoingWordsDiv = document.getElementById('ongoing-words');
-      state.words.forEach(word => {
-        const div = document.createElement('div');
-        div.innerHTML = `
-          <h3>Posted at block ${word.posted_at_block}</h3>
-          <img src="${word.image_url}" alt="image" width="256">
-          <p>Hints posted: ${word.hints_posted}</p>
-          ${word.winner ? `<p>Word: ${word.word}</p><p>Winner: nostr:${word.winner}</p>` : '<p>Not guessed yet</p>'}
-        `;
-        ongoingWordsDiv.appendChild(div);
-      });
-
-      const leaderboardDiv = document.getElementById('leaderboard');
-      const leaderboard = Object.entries(state.leaderboard).sort((a, b) => b[1] - a[1]);
-      leaderboard.forEach(([npub, wins]) => {
-        const p = document.createElement('p');
-        p.textContent = `nostr:${npub}: ${wins} wins`;
-        leaderboardDiv.appendChild(p);
+    async function fetchProfile() {
+      const relay = nostrTools.relayInit('wss://relay.damus.io');
+      await relay.connect();
+      const sub = relay.sub([{ kinds: [0], authors: [botPubkey] }]);
+      sub.on('event', (event) => {
+        const profile = JSON.parse(event.content);
+        document.getElementById('bot-name').textContent = profile.name || 'Word of the Day Bot';
+        document.getElementById('bot-picture').src = profile.picture || 'https://via.placeholder.com/64';
       });
     }
 
-    loadData().catch(console.error);
+    async function fetchFeed() {
+      const relay = nostrTools.relayInit('wss://relay.damus.io');
+      await relay.connect();
+      const sub = relay.sub([{ kinds: [1], authors: [botPubkey] }]);
+      sub.on('event', (event) => {
+        const feedItem = document.createElement('div');
+        feedItem.className = 'feed-item p-4 mb-4 bg-gray-800 rounded';
+        feedItem.innerHTML = `
+          <p class="text-sm text-gray-400">${new Date(event.created_at * 1000).toLocaleString()}</p>
+          <div>${DOMPurify.sanitize(marked.parse(event.content))}</div>
+        `;
+        document.getElementById('feed-items').prepend(feedItem); // Prepend for reverse chronological order
+      });
+    }
+
+    function copyNPUB() {
+      navigator.clipboard.writeText(npub).then(() => {
+        alert('NPUB copied to clipboard!');
+      });
+    }
+
+    function showTab(tabName) {
+      document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+      });
+      document.getElementById(tabName).classList.add('active');
+    }
+
+    // Load initial data
+    fetchProfile();
+    fetchFeed();
+    // Add functions to load current word, hints, and leaderboard as needed
   </script>
 </body>
 </html>
