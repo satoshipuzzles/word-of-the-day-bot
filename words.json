@@ -1,4 +1,6 @@
 {
+  "next_word_block": 887972,  // Adjust to a future block height to start
   "words": [],
-  "leaderboard": {}
+  "leaderboard": {},
+  "last_checked_time": 0
 }
