@@ -4,13 +4,9 @@ const { relayInit, getPublicKey, getEventHash, signEvent } = require('nostr-tool
 const axios = require('axios');
 
 async function main() {
-  // Load state
   const state = JSON.parse(fs.readFileSync('words.json', 'utf8'));
-
-  // Fetch current block height
   const current_block = await getCurrentBlockHeight();
 
-  // Post new word if it's time
   if (current_block >= state.next_word_block) {
     const word = await getRandomWord();
     const image_url = await generateAndSaveImage(word);
@@ -24,44 +20,35 @@ async function main() {
       hints_posted: 0,
       winner: null
     });
-    state.next_word_block += 144; // Schedule next word 144 blocks later
+    state.next_word_block += 144;
   }
 
-  // Process each ongoing word
   for (const word of state.words) {
     if (word.winner === null) {
-      // Post hint if it's time
       if (current_block >= word.next_hint_block) {
         const hint = await getHint(word.word);
         await postHintEvent(word.image_event_id, hint);
         word.hints_posted += 1;
-        word.next_hint_block += 21; // Schedule next hint 21 blocks later
+        word.next_hint_block += 21;
       }
-
-      // Check replies for correct guesses
       const replies = await getReplies(word.image_event_id, state.last_checked_time);
       for (const reply of replies) {
         if (reply.content.toLowerCase().includes(word.word.toLowerCase())) {
           word.winner = reply.pubkey;
           await postWinnerEvent(word.image_event_id, word.word, reply.pubkey);
           state.leaderboard[reply.pubkey] = (state.leaderboard[reply.pubkey] || 0) + 1;
-          break; // Stop checking once winner is found
+          break;
         }
       }
     }
   }
 
-  // Update last_checked_time
   state.last_checked_time = Math.floor(Date.now() / 1000);
-
-  // Save updated state
   fs.writeFileSync('words.json', JSON.stringify(state, null, 2));
 }
 
-// Helper Functions
-
 async function getCurrentBlockHeight() {
-  const response = await axios.get('https://blockstream.info/api/blocks/tip/height');
+  const response = await axios.get('https://blockchain.info/q/getblockcount');
   return parseInt(response.data);
 }
 
@@ -69,9 +56,7 @@ async function getRandomWord() {
   const response = await axios.post('https://api.openai.com/v1/chat/completions', {
     model: 'gpt-4',
     messages: [{ role: 'user', content: 'Give me a random word.' }]
-  }, {
-    headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` }
-  });
+  }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` } });
   return response.data.choices[0].message.content.trim();
 }
 
@@ -80,9 +65,7 @@ async function generateAndSaveImage(word) {
     prompt: `An image of ${word}`,
     n: 1,
     size: '512x512'
-  }, {
-    headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` }
-  });
+  }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` } });
   const image_url = response.data.data[0].url;
   const filename = `word-${Date.now()}.png`;
   const image_path = path.join('images', filename);
@@ -119,9 +102,7 @@ async function getHint(word) {
   const response = await axios.post('https://api.openai.com/v1/chat/completions', {
     model: 'gpt-4',
     messages: [{ role: 'user', content: `Give me a hint for the word "${word}" without saying the word.` }]
-  }, {
-    headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` }
-  });
+  }, { headers: { 'Authorization': `Bearer ${process.env.OPENAI_API_KEY}` } });
   return response.data.choices[0].message.content.trim();
 }
 
@@ -148,7 +129,7 @@ async function getReplies(image_event_id, since) {
   const sub = relay.sub([{ kinds: [1], '#e': [image_event_id], since }]);
   const replies = [];
   sub.on('event', event => replies.push(event));
-  await new Promise(resolve => setTimeout(resolve, 5000)); // Collect replies for 5 seconds
+  await new Promise(resolve => setTimeout(resolve, 5000));
   sub.unsub();
   relay.close();
   return replies;
